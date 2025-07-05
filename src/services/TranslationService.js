@@ -9,30 +9,31 @@ const TranslationService = {
   translateDocument: async (file, targetLanguage, fileName, progressCallback) => {
     const formData = new FormData();
     formData.append('file', file);
-    // Capitalize the first letter for the API
-    const language = targetLanguage.charAt(0).toUpperCase() + targetLanguage.slice(1);
-    formData.append('language', language);
+    // Use the language value as required by backend (no capitalization)
+    formData.append('language', targetLanguage);
 
     try {
       // For demo purposes, we can simulate progress
       progressCallback(30);
 
-      const response = await axios.post('https://759e-2a01-4f9-2a-d83-00-2.ngrok-free.app/translate', formData, {
-        headers: {
-          'Content-Type': 'multipart/form-data',
-        },
-        onUploadProgress: (progressEvent) => {
-          const percentCompleted = Math.round((progressEvent.loaded * 100) / progressEvent.total);
-          // Update progress from 30% to 90% during upload
-          progressCallback(30 + (percentCompleted * 60) / 100);
-        },
-      });
+      const response = await axios.post(
+        'https://759e-2a01-4f9-2a-d83-00-2.ngrok-free.app/translate',
+        formData,
+        {
+          // Do NOT set Content-Type manually!
+          onUploadProgress: (progressEvent) => {
+            const percentCompleted = Math.round((progressEvent.loaded * 100) / progressEvent.total);
+            // Update progress from 30% to 90% during upload
+            progressCallback(30 + (percentCompleted * 60) / 100);
+          },
+        }
+      );
       
       // Finalizing progress
       progressCallback(100);
 
-      // The API returns an object; we only need the translated text.
-      return response.data.translated_text;
+      // Return the entire response object since it contains the base64 content
+      return response.data;
     } catch (error) {
       console.error('API Translation error:', error);
       throw new Error(error.response?.data?.error || 'Failed to translate document');
@@ -73,73 +74,25 @@ const TranslationService = {
     doc.save(`${fileName}_translated.pdf`);
   },
   
-  downloadAsDocx: async (text, fileName) => {
-    // Parse the markdown text and create properly formatted docx elements
-    const children = parseMarkdownToDocxElements(text);
-
-    const doc = new Document({
-      styles: {
-        paragraphStyles: [
-          {
-            id: 'Normal',
-            name: 'Normal',
-            run: {
-              size: 24, // 12pt font
-              font: 'Calibri',
-            },
-            paragraph: {
-              spacing: { 
-                after: 240, // 12pt spacing after paragraphs
-                line: 276, // 1.15 line spacing
-              }
-            }
-          },
-          {
-            id: 'Heading1',
-            name: 'Heading 1',
-            run: {
-              size: 36, // 18pt font
-              bold: true,
-              font: 'Calibri',
-            },
-            paragraph: {
-              spacing: { before: 400, after: 240 }
-            }
-          },
-          {
-            id: 'Heading2',
-            name: 'Heading 2',
-            run: {
-              size: 32, // 16pt font
-              bold: true,
-              font: 'Calibri',
-            },
-            paragraph: {
-              spacing: { before: 320, after: 240 }
-            }
-          },
-          {
-            id: 'Heading3',
-            name: 'Heading 3',
-            run: {
-              size: 28, // 14pt font
-              bold: true,
-              font: 'Calibri',
-            },
-            paragraph: {
-              spacing: { before: 280, after: 240 }
-            }
-          }
-        ]
-      },
-      sections: [{
-        properties: {},
-        children: children,
-      }],
-    });
-
-    const blob = await Packer.toBlob(doc);
-    saveAs(blob, `${fileName}_translated.docx`);
+  downloadAsDocx: async (apiResponse, fileName) => {
+    try {
+      // Extract the base64 content from the API response
+      const base64Content = apiResponse.content;
+      // Convert base64 to binary (same as your HTML example)
+      const byteCharacters = atob(base64Content);
+      const byteNumbers = new Array(byteCharacters.length);
+      for (let i = 0; i < byteCharacters.length; i++) {
+        byteNumbers[i] = byteCharacters.charCodeAt(i);
+      }
+      const byteArray = new Uint8Array(byteNumbers);
+      const blob = new Blob([byteArray], { type: apiResponse.content_type });
+      // Use the filename from the API if present, otherwise fallback
+      const downloadName = apiResponse.filename || `${fileName}_translated.docx`;
+      saveAs(blob, downloadName);
+    } catch (error) {
+      console.error('Error downloading document:', error);
+      throw new Error('Failed to download the translated document');
+    }
   },
   
   // This function is no longer used for download but kept for its prompts
@@ -157,160 +110,5 @@ const TranslationService = {
     return prompts[language].replace('[DOCUMENT_CHUNK]', chunk);
   },
 };
-
-// Helper function to parse markdown into DOCX elements
-function parseMarkdownToDocxElements(markdownText) {
-  const elements = [];
-  
-  // Split by newlines to process each line
-  const lines = markdownText.split('\n');
-  let inList = false;
-  let listItems = [];
-  
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i].trim();
-    
-    // Skip empty lines but add spacing paragraph
-    if (line === '') {
-      if (inList) {
-        // End the list
-        elements.push(...listItems);
-        listItems = [];
-        inList = false;
-      }
-      continue;
-    }
-    
-    // Heading 1: # Heading
-    if (line.startsWith('# ')) {
-      if (inList) {
-        elements.push(...listItems);
-        listItems = [];
-        inList = false;
-      }
-      elements.push(new Paragraph({
-        text: line.substring(2),
-        heading: HeadingLevel.HEADING_1,
-        spacing: { before: 400, after: 240 }
-      }));
-    } 
-    // Heading 2: ## Heading
-    else if (line.startsWith('## ')) {
-      if (inList) {
-        elements.push(...listItems);
-        listItems = [];
-        inList = false;
-      }
-      elements.push(new Paragraph({
-        text: line.substring(3),
-        heading: HeadingLevel.HEADING_2,
-        spacing: { before: 320, after: 240 }
-      }));
-    } 
-    // Heading 3: ### Heading
-    else if (line.startsWith('### ')) {
-      if (inList) {
-        elements.push(...listItems);
-        listItems = [];
-        inList = false;
-      }
-      elements.push(new Paragraph({
-        text: line.substring(4),
-        heading: HeadingLevel.HEADING_3,
-        spacing: { before: 280, after: 240 }
-      }));
-    }
-    // List item
-    else if (line.startsWith('- ') || line.startsWith('* ') || 
-             line.match(/^\d+\.\s/)) {
-      const listItemText = line.startsWith('- ') || line.startsWith('* ') ? 
-                          line.substring(2) : 
-                          line.replace(/^\d+\.\s/, '');
-      
-      inList = true;
-      listItems.push(new Paragraph({
-        text: listItemText,
-        bullet: { level: 0 },
-        spacing: { before: 80, after: 80 }
-      }));
-    }
-    // Regular paragraph with formatting
-    else {
-      if (inList) {
-        elements.push(...listItems);
-        listItems = [];
-        inList = false;
-      }
-      
-      // Process text formatting (bold, italic)
-      const textRuns = processTextFormatting(line);
-      
-      elements.push(new Paragraph({
-        children: textRuns,
-        spacing: { after: 240 }
-      }));
-    }
-  }
-  
-  // Add any remaining list items
-  if (inList && listItems.length > 0) {
-    elements.push(...listItems);
-  }
-  
-  return elements;
-}
-
-// Helper to process text formatting like bold and italic
-function processTextFormatting(text) {
-  const parts = [];
-  let currentText = '';
-  let inBold = false;
-  let inItalic = false;
-  
-  for (let i = 0; i < text.length; i++) {
-    // Bold with ** or __
-    if ((text.substring(i, i + 2) === '**' || text.substring(i, i + 2) === '__') && 
-        (i === 0 || text[i-1] !== '\\')) {
-      if (currentText) {
-        parts.push(new TextRun({
-          text: currentText,
-          bold: inBold,
-          italic: inItalic
-        }));
-        currentText = '';
-      }
-      inBold = !inBold;
-      i++; // Skip the second character
-    } 
-    // Italic with * or _
-    else if ((text[i] === '*' || text[i] === '_') && 
-             text[i+1] !== '*' && text[i+1] !== '_' && 
-             (i === 0 || text[i-1] !== '\\')) {
-      if (currentText) {
-        parts.push(new TextRun({
-          text: currentText,
-          bold: inBold,
-          italic: inItalic
-        }));
-        currentText = '';
-      }
-      inItalic = !inItalic;
-    } 
-    else {
-      currentText += text[i];
-    }
-  }
-  
-  // Add any remaining text
-  if (currentText) {
-    parts.push(new TextRun({
-      text: currentText,
-      bold: inBold,
-      italic: inItalic
-    }));
-  }
-  
-  return parts.length > 0 ? parts : [new TextRun(text)];
-}
 
 export default TranslationService;
